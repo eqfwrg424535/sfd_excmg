@@ -22,7 +22,7 @@ sfd_excmg.f90
 /////////////////////////////////////////////////////////////////////////////
 Other notes:
 
-Pleaase refer to the 'docs/sfd_excmg.pdf' for further information, including how
+Pleaase refer to the *.docx for further information, including how
 to build and run this program.
 
 If you have any questions, please contact us with the following e-mail:
