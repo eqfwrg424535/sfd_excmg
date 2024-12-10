@@ -1,0 +1,23 @@
+#!/bin/bash
+#PBS -N sfd_excmg
+#PBS -l nodes=1:ppn=80
+#PBS -j oe
+#PBS -l walltime=200:00:0
+#PBS -q dikong
+
+cd $PBS_O_WORKDIR
+echo my job id is $PBS_JOBID | tee  A6_Y90.txt
+echo begin time is `date` | tee -a  A6_Y90.txt
+
+export I_MPI_HYDRA_BOOTSTRAP=ssh
+export OMP_NUM_THREADS=40
+export MKL_PARDISO_OOC_PATH=/public/home/cug051362/mt3d_new/pardiso
+export MKL_PARDISO_OOC_MAX_CORE_SIZE=200000 
+
+#ssh c069
+#cd ~/mt3d_new
+#make
+./sfd3d examples/dtm1/dtm1
+
+echo end time is `date` | tee -a  run_inv.txt
+
