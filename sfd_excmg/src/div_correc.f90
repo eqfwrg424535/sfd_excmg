@@ -1,9 +1,12 @@
 module  divergence_corr
-   use global_parameter
+   ! use global_parameter
     use model_selection
    implicit none
    !character,parameter::pre_type = 'S'
-  
+    logical,parameter ::div_cor = .true., fddc = .true.
+    logical,parameter ::output_div = .false., csem = .true.
+    integer,parameter ::corr_intv = 200
+
     contains
      subroutine div_correc(nl,a,b,c,x,ep,sigma,el,emap,dc,d_mat,d_ia,d_ja,t_mat,t_ia,&
             t_ja,tol_cor,icount)
@@ -489,19 +492,72 @@ module  divergence_corr
       return
    end subroutine
 
-   subroutine fddc_assemb(a,b,c,nair,sigma,sigma_anm,pmat,pia,pja,tmat,tia,tja,el,&
+   function avg_conduc(a,b,c,sigma) result(avgsig)
+  !!function for calculating average conductivity at nodes
+  !!follow the steps put forward by Li et al(2022,Geophysics)
+    implicit none
+  integer nx,ny,nz,ne,nl,np
+  real*8 a(:),b(:),c(:),h(6),sig1(8,6),sig2(6),vbig
+  real*8,allocatable:: sigma(:,:),avgsig(:,:),a1(:),b1(:),c1(:)
+  integer i,j,k,m,ind,eid,eid2,eid3,eid4,ids(8)
+
+  nx = size(a); ny= size(b); nz =size(c)
+ ! ne = nx*ny*nz; 
+  np = (nx+1)*(ny+1)*(nz+1)
+ ! nl = nx*(ny+1)*(nz+1)+(nx+1)*ny*(nz+1)+(nx+1)*(ny+1)*nz
+  allocate(avgsig(np,6))
+  ! the domaied is manually enlarged to ensure all nodes are connected
+  ! with 6 edges, leading to a standard calculation process
+  allocate(a1(nx+2),b1(ny+2),c1(nz+2))
+  a1(2:nx+1) = a; a1(1) = a(1); a1(nx+2) = a(nx) 
+  b1(2:ny+1) = b; b1(1) = b(1); b1(ny+2) = b(ny)
+  c1(2:nz+1) = c; c1(1) = c(1); c1(nz+2) = c(nz)
+  do k = 1,nz+1
+    do j = 1,ny+1
+       do i = 1,nx+1
+          eid = (k-2)*nx*ny+(j-2)*nx+i-1
+          h = (/a1(i),a1(i+1),b1(j),b1(j+1),c1(k),c1(k+1)/)
+          ids = eid+(/0,1,nx,nx+1,nx*ny,nx*ny+1,nx*ny+nx,nx*ny+nx+1/)
+          if(eid.gt.0)then
+            if(k.eq.nz+1) ids(5:8) = ids(1:4)
+            if(j.eq.ny+1) ids(3:4) = ids(1:2); ids(7:8)=ids(5:6)
+            if(i.eq.nx+1) ids(2:8:2) = ids(1:7:2)
+          else
+            if(k.eq.1) ids(1:4) = ids(5:8) 
+            if(j.eq.1) ids(1:2) = ids(3:4); ids(5:6)=ids(7:8)
+            if(i.eq.1) ids(1:7:2) = ids(2:8:2)            
+          endif 
+          sig1 = sigma(ids,1:6)
+          vbig = ((h(1)+h(2))*(h(3)+h(4))*(h(5)+h(6)))
+          !volume average
+          sig2 = (sig1(1,:)*h(1)*h(3)*h(5)+sig1(2,:)*h(2)*h(3)*h(5)+sig1(3,:)*h(1)*h(4)*h(5)+&
+          sig1(4,:)*h(2)*h(4)*h(5)+sig1(5,:)*h(1)*h(3)*h(6)+sig1(6,:)*h(2)*h(3)*h(6)+&
+          sig1(7,:)*h(1)*h(4)*h(6)+sig1(8,:)*h(2)*h(4)*h(6))
+       
+          !divergence at the nodes
+          ind = (k-1)*(nx+1)*(ny+1)+(j-1)*(nx+1)+i
+          avgsig(ind,:) = sig2/vbig
+        enddo
+    enddo
+  enddo
+
+  deallocate(a1,b1,c1)
+
+end function
+
+   subroutine fddc_assemb(iso,a,b,c,nair,sigma,sigma_anm,pmat,pia,pja,tmat,tia,tja,el,&
           emap,dc,ep)
     implicit none
     real(8) a(:),b(:),c(:)
     complex(8),allocatable:: v(:),pmat(:),tmat(:),ep(:),pp(:),v2(:),tmat2(:)
-    real*8,allocatable::sigma(:,:),el(:),sigma_anm(:,:) !length of each edge
+    real*8,allocatable::sigma(:,:),el(:),sigma_anm(:,:),sigma_nd(:,:) !length of each edge
     integer(8),allocatable::tia(:),pia(:)
     integer,allocatable ::vr(:),vc(:),tja(:),pja(:),me(:,:),me2(:,:),emap(:,:)
     !real*8
     !::k11(8,8),k22(8,8),k33(8,8),t1(8,4),t2(8,4),t3(8,4),ke(8,8),te(8,12)
-    real*8 hx,hy,hz,sigmas(6),ve
-    integer i,j,k,nx,ny,nz,nl,np,ne,xnl,ynl,n1,nj,nk,lmap(12,2),ie,ind,nair,idx(6),eid(12),&
-          nid1(12),nid2(12)
+    real*8 hx,hy,hz,sigmas(6),ve,sigmat(18),coef(30),asg(12)
+    integer iso,i,j,k,nx,ny,nz,nl,np,ne,xnl,ynl,n1,n2,nj,nk,lmap(12,2),ie,ind,nair,idx(6),eid(12),&
+          nid1(12),nid2(12),bdw,bdw2
     integer(8) nnz,nnz2,ii
     logical,allocatable :: dc(:)   
 
@@ -512,8 +568,18 @@ module  divergence_corr
     ynl = (nx+1)*ny*(nz+1)
     nl = xnl+ynl+(nx+1)*(ny+1)*nz
     n1 = nx*ny
-    allocate(el(nl),emap(nl,2))
-    allocate(v(np*7),vr(np*7),vc(np*7),dc(np))
+    n2 = (nx+1)*(ny+1)
+    allocate(el(nl),emap(nl,2),dc(np))
+    !! different scheme for isotropic and anisotropic cases, and thus different bandwidth
+   if(iso.eq.1)then
+    allocate(v(np*7),vr(np*7),vc(np*7))
+    bdw = 7; bdw2 = 6
+   else
+    allocate(v(np*19),vr(np*19),vc(np*19))
+    bdw = 19; bdw2 = 30 
+   endif
+   ! calculate the average conductivity at nodes
+   sigma_nd = avg_conduc(a,b,c,sigma)
     v = 0; vr = 0; vc = 0
     dc = .false.
     nnz = 0
@@ -523,18 +589,9 @@ module  divergence_corr
            ind = (k-1)*(nx+1)*(ny+1)+(j-1)*(nx+1)+I
            ie = (k-1)*nx*ny+(j-1)*nx+i
            if(k.ne.1.and.k.ne.nz+1.and.j.ne.1.and.j.ne.ny+1.and.i.ne.1.and.i.ne.nx+1)then
-             !! calculate the average conductivity first
-           !  sigmas =(sigma(ie,1)*a(i)*b(j)*c(k)+sigma(ie-1,1)*a(i-1)*b(j)*c(k)+sigma(ie-nx,1)*a(i)*b(j-1)*c(k)+&
-           !  sigma(ie-nx-1,1)*a(i-1)*b(j-1)*c(k)+sigma(ie-n1,1)*a(i)*b(j)*c(k-1)+sigma(ie-n1-1,1)*a(i-1)*b(j)*c(k-1)+&
-           !  sigma(ie-n1-nx,1)*a(i)*b(j-1)*c(k-1)+sigma(ie-n1-nx-1,1)*a(i-1)*b(j-1)*c(k-1))/((a(i-1)+a(i))*&
-            ! (b(j-1)+b(j))*(c(k-1)+c(k)))
-            !order: bottom-front-left-right-back-top
-           ! if(k.le.nair+1)then           
-           !   sigmas = (/(a(i-1)+a(i))*(b(j-1)+b(j))/c(k-1), (a(i-1)+a(i))*(c(k-1)+c(k))/b(j-1),&
-           !            (b(j-1)+b(j))*(c(k-1)+c(k))/a(i-1), (b(j-1)+b(j))*(c(k-1)+c(k))/a(i), &
-           !            (a(i-1)+a(i))*(c(k-1)+c(k))/b(j),(a(i-1)+a(i))*(b(j-1)+b(j))/c(k)/)/4
-           ! else
-             ve = ((a(i-1)+a(i))*(b(j-1)+b(j))*(c(k-1)+c(k)))
+           !! isotropic case
+           if(iso.eq.1)then
+             
              sigmas = (/(sigma(ie-n1-nx-1,3)*a(i-1)*b(j-1)+sigma(ie-n1-nx,3)*a(i)*b(j-1)+&
                      sigma(ie-n1-1,3)*a(i-1)*b(j)+sigma(ie-n1,3)*a(i)*b(j))/c(k-1)*2,&
                      (sigma(ie-n1-nx-1,2)*a(i-1)*c(k-1)+sigma(ie-n1-nx,2)*a(i)*c(k-1)+&
@@ -556,11 +613,60 @@ module  divergence_corr
              vr((ind-1)*7+1:ind*7) = ind
              vc((ind-1)*7+1:ind*7) =(/ind-(nx+1)*(ny+1),ind-nx-1,ind-1,ind,ind+1,ind+nx+1,ind+(nx+1)*(ny+1)/)
             nnz = nnz + 7
+            else
+            ! see Liu & Yin (2013,JAG) for reference 
+              coef = (/sigma_nd(ind-1,1)/a(i-1)/(a(i-1)+a(i))*2,  sigma_nd(ind,1)/a(i)/(a(i-1)+a(i))*2,& !ci_1,ci_2
+               sigma_nd(ind-nx-1,2)/b(j-1)/(b(j-1)+b(i))*2,  sigma_nd(ind,2)/b(j)/(b(j-1)+b(i))*2,& !ci_3.ci_4
+              sigma_nd(ind-n2,3)/c(k-1)/(c(k-1)+c(k))*2,  sigma_nd(ind,3)/c(k)/(c(k-1)+c(k))*2,& !ci_5,ci_6
+              sigma_nd(ind-nx-2,4)/((a(i-1)+a(i))*(c(k-1)+c(k))*b(j-1)/4)/a(i-1)/(b(j-1)+b(j)),& !ca_1
+              -sigma_nd(ind-nx-1,4)/((a(i-1)+a(i))*(c(k-1)+c(k))*b(j-1)/4)/a(i)/(b(j-1)+b(j)),& !ca_2
+              sigma_nd(ind-n2-1,5)/((a(i-1)+a(i))*(b(j-1)+b(j))*c(k-1)/4)/a(i-1)/(c(k-1)+c(k)),& !ca_3
+              -sigma_nd(ind-n2,5)/((a(i-1)+a(i))*(b(j-1)+b(j))*c(k-1)/4)/a(i)/(c(k-1)+c(k)),& !ca_4
+              sigma_nd(ind-nx-2,4)/((c(k-1)+c(k))*(b(j-1)+b(j))*a(i-1)/4)/b(j-1)/(a(i-1)+a(i)),& !ca_5
+              -sigma_nd(ind-1,4)/((c(k-1)+c(k))*(b(j-1)+b(j))*a(i-1)/4)/b(j)/(a(i-1)+a(i)),& !ca_6
+              sigma_nd(ind-n2-nx-1,6)/((a(i-1)+a(i))*(b(j-1)+b(j))*c(k-1)/4)/b(j-1)/(c(k-1)+c(k)),& !ca_7
+              -sigma_nd(ind-n2,6)/((a(i-1)+a(i))*(b(j-1)+b(j))*c(k-1)/4)/b(j)/(c(k-1)+c(k)),& !ca_8
+              sigma_nd(ind-n2-1,5)/((c(k-1)+c(k))*(b(j-1)+b(j))*a(i-1)/4)/c(k-1)/(a(i-1)+a(i)),& !ca_9
+              -sigma_nd(ind-1,5)/((c(k-1)+c(k))*(b(j-1)+b(j))*a(i-1)/4)/c(k)/(a(i-1)+a(i)),& !ca_10
+              sigma_nd(ind-n2-nx-1,6)/((c(k-1)+c(k))*(a(i-1)+a(i))*b(j-1)/4)/c(k-1)/(b(j-1)+b(j)),& !ca_11
+              -sigma_nd(ind-nx-1,6)/((c(k-1)+c(k))*(a(i-1)+a(i))*b(j-1)/4)/c(k)/(b(j-1)+b(j)),& !ca_12
+              -sigma_nd(ind-1,4)/((c(k-1)+c(k))*(a(i-1)+a(i))*b(j)/4)/a(i-1)/(b(j-1)+b(j)),& !ca_13
+              sigma_nd(ind,4)/((c(k-1)+c(k))*(a(i-1)+a(i))*b(j)/4)/a(i)/(b(j-1)+b(j)),& !ca_14
+              -sigma_nd(ind-1,5)/((b(j-1)+b(j))*(a(i-1)+a(i))*c(k)/4)/a(i-1)/(c(k-1)+c(k)),& !ca_15
+              sigma_nd(ind,5)/((b(j-1)+b(j))*(a(i-1)+a(i))*c(k)/4)/a(i)/(c(k-1)+c(k)),& !ca_16
+              -sigma_nd(ind-nx-1,4)/((b(j-1)+b(j))*(c(k-1)+c(k))*a(i)/4)/b(j-1)/(a(i-1)+a(i)),& !ca_17
+              sigma_nd(ind,4)/((b(j-1)+b(j))*(c(k-1)+c(k))*a(i)/4)/b(j)/(a(i-1)+a(i)),& !ca_18
+              -sigma_nd(ind-nx-1,6)/((b(j-1)+b(j))*(a(i-1)+a(i))*c(k)/4)/b(j-1)/(c(k-1)+c(k)),& !ca_19
+              sigma_nd(ind,6)/((b(j-1)+b(j))*(a(i-1)+a(i))*c(k)/4)/b(j)/(c(k-1)+c(k)),& !ca_20
+              -sigma_nd(ind-n2,5)/((b(j-1)+b(j))*(c(k-1)+c(k))*a(i)/4)/c(k-1)/(a(i-1)+a(i)),& !ca_21
+              sigma_nd(ind,5)/((b(j-1)+b(j))*(c(k-1)+c(k))*a(i)/4)/c(k)/(a(i-1)+a(i)),& !ca_22
+              -sigma_nd(ind-n2,6)/((c(k-1)+c(k))*(a(i-1)+a(i))*b(j)/4)/c(k-1)/(b(j-1)+b(j)),& !ca_23
+              sigma_nd(ind,6)/((c(k-1)+c(k))*(a(i-1)+a(i))*b(j)/4)/c(k)/(b(j-1)+b(j))/) !ca_24
+              sigmat = (/coef(13)+coef(17),coef(9)+coef(15), &
+              coef(5)+coef(15)+coef(17)+coef(27)+coef(29)-coef(9)-coef(10)-coef(13)-coef(14),&
+              coef(10)+coef(27),coef(14)+coef(29), coef(7)+coef(11),&
+              coef(3)+coef(11)+coef(13)+coef(23)+coef(25)-coef(7)-coef(8)-coef(17)-coef(18),coef(8)+coef(23),&
+              coef(1)+coef(7)+coef(9)+coef(19)+coef(21)-coef(11)-coef(12)-coef(15)-coef(16),&
+              coef(2)+coef(8)+coef(10)+coef(20)+coef(22)-coef(23)-coef(24)-coef(27)-coef(28),coef(12)+coef(19),&
+              coef(4)+coef(12)+coef(14)+coef(24)+coef(26)-coef(19)-coef(20)-coef(29)-coef(30),coef(20)+coef(22),&
+              coef(18)+coef(25),coef(21)+coef(16),&
+              coef(6)+coef(7)+coef(9)+coef(19)+coef(21)-coef(11)-coef(12)-coef(15)-coef(16),&
+              coef(22)+coef(28),coef(26)+coef(30)/)
+              ve = ((a(i-1)+a(i))*(b(j-1)+b(j))*(c(k-1)+c(k)))
+
+              v((ind-1)*19+1:(ind-1)*19+9) = sigmat(1:9)*ve;v((ind-1)*19+11:(ind-1)*19+19) = sigmat(10:18)*ve
+              v((ind-1)*19+10) = -sum(sigmat)*ve
+              vr((ind-1)*19+1:ind*19) = ind
+              vc((ind-1)*19+1:ind*19) = (/ind-n2-nx-1,ind-n2-1,ind-n2,ind-n2+1,ind-n2+nx+1,&
+              ind-nx-2,ind-nx-1,ind-nx,ind-1,ind,ind+1,ind+nx,ind+nx+1,ind+nx+2,&
+              ind+n2-nx-1,ind+n2-1,ind+n2,ind+n2+1,ind+n2+nx+1/)
+              nnz = nnz+19
+            endif
          else
             nnz = nnz+1
-            v((ind-1)*7+1) = 1.d0
-            vr((ind-1)*7+1) = ind
-            vc((ind-1)*7+1) = ind
+            v((ind-1)*bdw+1) = 1.d0
+            vr((ind-1)*bdw+1) = ind
+            vc((ind-1)*bdw+1) = ind
             dc(ind) = .true.
            endif
         ENDDO
@@ -572,10 +678,10 @@ module  divergence_corr
     pia(1) = 1
   !  open(34,file='pmat.dat')
     do i = 1,np
-          do j = 1,7
-               ind = 7*int((i-1),8)+j
+          do j = 1,bdw
+               ind = bdw*int((i-1),8)+j
               ! print *,ind
-               if(vc(ind).ne.0.and.vr(ind).ne.0)then
+               if(v(ind).ne.0.and.vc(ind).ne.0)then
                     k = k +1
                     pmat(k) = v(ind)
                     pja(k) = vc(ind)
@@ -588,7 +694,11 @@ module  divergence_corr
   !  close(34)
   !   stop 
     !! discretization of the divergence operator
+   if(iso.eq.1)then
     allocate(v(np*6),vr(np*6),vc(np*6))
+   else
+    allocate(v(np*30),vr(np*30),vc(np*30))
+   endif
     nnz = 0
     v = 0; vr = 0; vc = 0
     do k = 1,nz+1
@@ -596,20 +706,9 @@ module  divergence_corr
         do i =1,nx+1         
             ind = (k-1)*(nx+1)*(ny+1)+(j-1)*(nx+1)+I
             ie = (k-1)*nx*ny+(j-1)*nx+i
-           if(k.ne.1.and.k.ne.nz+1.and.j.ne.1.and.j.ne.ny+1.and.i.ne.1.and.i.ne.nx+1)then     
-             !! calculate the average conductivity first
-           !   sigmas =(sigma(ie,1)*a(i)*b(j)*c(k)+sigma(ie-1,1)*a(i-1)*b(j)*c(k)+sigma(ie-nx,1)*a(i)*b(j-1)*c(k)+&
-           !   sigma(ie-nx-1,1)*a(i-1)*b(j-1)*c(k)+sigma(ie-n1,1)*a(i)*b(j)*c(k-1)+sigma(ie-n1-1,1)*a(i-1)*b(j)*c(k-1)+&
-           !   sigma(ie-n1-nx,1)*a(i)*b(j-1)*c(k-1)+sigma(ie-n1-nx-1,1)*a(i-1)*b(j-1)*c(k-1))/((a(i-1)+a(i))*&
-           !   (b(j-1)+b(j))*(c(k-1)+c(k)))
-            ve = (a(i-1)+a(i))*(b(j-1)+b(j))*(c(k-1)+c(k))
-          !  v((ind-1)*6+1:ind*6) =(/-2/(a(i-1)+a(i)),2/(a(i-1)+a(i)),-2/(b(j-1)+b(j)),2/(b(j-1)+b(j)),&
-           ! -2/(c(k-1)+c(k)),2/(c(k-1)+c(k))/)*sigmas*ve  
-           ! if(k.le.nair+1)then
-           !   sigmas = (/-(a(i-1)+a(i))*(b(j-1)+b(j)),  -(a(i-1)+a(i))*(c(k-1)+c(k)),&
-           !            -(b(j-1)+b(j))*(c(k-1)+c(k)),  (b(j-1)+b(j))*(c(k-1)+c(k)), &
-           !            (a(i-1)+a(i))*(c(k-1)+c(k)), (a(i-1)+a(i))*(b(j-1)+b(j))/)/4
-           ! else   
+           if(k.ne.1.and.k.ne.nz+1.and.j.ne.1.and.j.ne.ny+1.and.i.ne.1.and.i.ne.nx+1)then 
+           if(iso.eq.1)then    
+           
         !!the divergence of secondary field
              sigmas =(/-(sigma(ie-n1-nx-1,3)*a(i-1)*b(j-1)+sigma(ie-n1-nx,3)*a(i)*b(j-1)+&
                      sigma(ie-n1-1,3)*a(i-1)*b(j)+sigma(ie-n1,3)*a(i)*b(j))*2,&
@@ -649,11 +748,80 @@ module  divergence_corr
           !  emap(vc((ind-1)*6+1:ind*6),1)=(/ind-1,ind,ind-nx-1,ind,ind-(nx+1)*(ny+1),ind/)
           !  emap(vc((ind-1)*6+1:ind*6),2)=(/ind,ind+1,ind,ind+nx+1,ind,ind+(nx+1)*(ny+1)/)
            nnz = nnz+6
+           else
+            !! average conductivity at 6 main edges
+             sigmas =(/(sigma(ie-n1-nx-1,3)*a(i-1)*b(j-1)+sigma(ie-n1-nx,3)*a(i)*b(j-1)+&
+                     sigma(ie-n1-1,3)*a(i-1)*b(j)+sigma(ie-n1,3)*a(i)*b(j))/4/((a(i-1)+a(i))*(b(j-1)+b(j))),&
+                     (sigma(ie-n1-nx-1,2)*a(i-1)*c(k-1)+sigma(ie-n1-nx,2)*a(i)*c(k-1)+&
+                      sigma(ie-nx-1,2)*a(i-1)*c(k)+sigma(ie-nx,2)*a(i)*c(k))/4/((a(i-1)+a(i))*(c(k-1)+c(k))),&
+                     (sigma(ie-n1-nx-1,1)*b(j-1)*c(k-1)+sigma(ie-n1-1,1)*b(j)*c(k-1)+&
+                      sigma(ie-nx-1,1)*b(j-1)*c(k)+sigma(ie-1,1)*b(j)*c(k))/4/((c(k-1)+c(k))*(b(j-1)+b(j))),&
+                     (sigma(ie-n1-nx,1)*b(j-1)*c(k-1)+sigma(ie-n1,1)*b(j)*c(k-1)+&
+                      sigma(ie-nx,1)*b(j-1)*c(k)+sigma(ie,1)*b(j)*c(k))/4/((c(k-1)+c(k))*(b(j-1)+b(j))),&
+                     (sigma(ie-n1-1,2)*a(i-1)*c(k-1)+sigma(ie-n1,2)*a(i)*c(k-1)+&
+                      sigma(ie-1,2)*a(i-1)*c(k)+sigma(ie,2)*a(i)*c(k))/4/((a(i-1)+a(i))*(c(k-1)+c(k))),&
+                     (sigma(ie-nx-1,3)*a(i-1)*b(j-1)+sigma(ie-nx,3)*a(i)*b(j-1)+&
+                     sigma(ie-1,3)*a(i-1)*b(j)+sigma(ie,3)*a(i)*b(j))/4/((a(i-1)+a(i))*(b(j-1)+b(j))) /)
+            !! area coefficients to be used
+           ! asg = (/a(i-1)/(a(i-1)+a(i)),a(i)/(a(i-1)+a(i)),b(j-1)/(b(j-1)+b(j)),b(j)/(b(j-1)+b(j)),&
+           !  c(k-1)/(c(k-1)+c(k)),c(k)/(c(k-1)+c(k))/)
+             asg(1:4) = (/b(j-1)*c(k-1),b(j-1)*c(k),b(j)*c(k-1),b(j)*c(k)/)/((b(j-1)+b(j))*(c(k-1)+c(k))) !(i-1/2,j,k)&(i+1/2,j,k)
+             asg(5:8) = (/a(i-1)*c(k-1),a(i-1)*c(k),a(i)*c(k-1),a(i)*c(k)/)/((a(i-1)+a(i))*(c(k-1)+c(k))) !(i,j-1/2,k)&(i,j+1/2,k)
+             asg(9:12) = (/b(j-1)*a(i-1),b(j-1)*a(i),b(j)*a(i-1),b(j)*a(i)/)/((b(j-1)+b(j))*(a(i-1)+a(i))) !(i,j,k-1/2)&(i,j,k+1/2)
+           
+             ! section by section(Jx, Jy, Jz), in case of bugs          
+            coef(1:10) = (/-(asg(9)*sigma(ie-nx-n1-1,5)+asg(11)*sigma(ie-n1-1,5))/(c(k-1)+c(k)),&
+            -(asg(10)*sigma(ie-nx-n1,5)+asg(12)*sigma(ie-n1,5))/(c(k-1)+c(k)),&
+            -(asg(5)*sigma(ie-nx-n1-1,4)+asg(6)*sigma(ie-nx-1,4))/(b(j-1)+b(j)),&
+            -(asg(7)*sigma(ie-nx-n1,4)+asg(8)*sigma(ie-nx,4))/(b(j-1)+b(j)),&
+             -sigmas(3)/(a(i-1)+a(i))*2+(asg(5)*sigma(ie-n1-1,4)+asg(6)*sigma(ie-1,4)-asg(5)*sigma(ie-nx-n1-1,4)-asg(6)*sigma(ie-nx-1,4))/(b(j-1)+b(j))+ &
+             (asg(9)*sigma(ie-nx-1,5)+asg(11)*sigma(ie-1,5)-asg(9)*sigma(ie-nx-n1-1,5)-asg(11)*sigma(ie-n1-1,5))/(c(k-1)+c(k)),&
+             sigmas(4)/(a(i-1)+a(i))*2+(asg(3)*sigma(ie-n1,4)+asg(4)*sigma(ie,4)-asg(1)*sigma(ie-nx-n1,4)-asg(2)*sigma(ie-nx,4))/(b(j-1)+b(j))+ &
+             (asg(10)*sigma(ie-nx,5)+asg(12)*sigma(ie,5)-asg(10)*sigma(ie-nx-n1,5)-asg(12)*sigma(ie-n1,5))/(c(k-1)+c(k)),&
+             (asg(3)*sigma(ie-n1-1,4)+asg(4)*sigma(ie-1,4))/(b(j-1)+b(j)),&
+             (asg(3)*sigma(ie-n1,4)+asg(4)*sigma(ie,4))/(b(j-1)+b(j)),&
+             (asg(9)*sigma(ie-nx-1,5)+asg(11)*sigma(ie-1,5))/(c(k-1)+c(k)),&
+             (asg(10)*sigma(ie-nx,5)+asg(12)*sigma(ie,5))/(c(k-1)+c(k))/) 
+           coef(11:20) = (/-(asg(9)*sigma(ie-nx-n1-1,6)+asg(10)*sigma(ie-n1-nx,6))/(c(k-1)+c(k)),&
+            -(asg(11)*sigma(ie-n1-1,6)+asg(12)*sigma(ie-n1,6))/(c(k-1)+c(k)),&
+            -(asg(1)*sigma(ie-nx-n1-1,4)+asg(2)*sigma(ie-nx-1,4))/(a(i-1)+a(i)),&
+             -sigmas(2)/(b(j-1)+b(j))*2+(asg(1)*sigma(ie-n1-nx,4)+asg(2)*sigma(ie-nx,4)-asg(1)*sigma(ie-nx-n1-1,4)-asg(2)*sigma(ie-nx-1,4))/(a(i-1)+a(i))+ &
+             (asg(9)*sigma(ie-nx-1,6)+asg(10)*sigma(ie-nx,6)-asg(9)*sigma(ie-nx-n1-1,6)-asg(10)*sigma(ie-n1-nx,6))/(c(k-1)+c(k)),&
+              (asg(1)*sigma(ie-nx-n1,4)+asg(2)*sigma(ie-nx,4))/(a(i-1)+a(i)),&
+             -(asg(3)*sigma(ie-n1-1,4)+asg(4)*sigma(ie-1,4))/(a(i-1)+a(i)),&
+             sigmas(5)/(b(j-1)+b(j))*2+(asg(3)*sigma(ie-n1,4)+asg(4)*sigma(ie,4)-asg(3)*sigma(ie-n1-1,4)-asg(4)*sigma(ie-1,4))/(a(i-1)+a(i))+ &
+             (asg(11)*sigma(ie-1,6)+asg(12)*sigma(ie,6)-asg(11)*sigma(ie-n1-1,6)-asg(12)*sigma(ie-n1,6))/(c(k-1)+c(k)),&
+             (asg(3)*sigma(ie-n1,4)+asg(4)*sigma(ie,4))/(a(i-1)+a(i)),&
+             (asg(9)*sigma(ie-nx-1,6)+asg(10)*sigma(ie-nx,6))/(c(k-1)+c(k)),&
+             (asg(9)*sigma(ie-1,6)+asg(10)*sigma(ie,6))/(c(k-1)+c(k))/) 
+           coef(21:30) = (/-(asg(5)*sigma(ie-nx-n1-1,6)+asg(7)*sigma(ie-n1-nx,6))/(b(j-1)+b(j)),&
+            -(asg(1)*sigma(ie-nx-n1-1,5)+asg(3)*sigma(ie-n1-1,5))/(a(i-1)+a(i)),&
+            -sigmas(1)/(c(k-1)+c(k))*2+(asg(1)*sigma(ie-n1-nx,5)+asg(3)*sigma(ie-n1,5)-asg(1)*sigma(ie-nx-n1-1,5)-asg(3)*sigma(ie-n1-1,5))/(a(i-1)+a(i))+ &
+             (asg(5)*sigma(ie-n1-1,6)+asg(7)*sigma(ie-n1,6)-asg(5)*sigma(ie-nx-n1-1,6)-asg(7)*sigma(ie-n1-nx,6))/(b(j-1)+b(j)),&
+            (asg(1)*sigma(ie-nx-n1,5)+asg(3)*sigma(ie-n1,5))/(a(i-1)+a(i)),&
+            (asg(5)*sigma(ie-n1-1,6)+asg(7)*sigma(ie-n1,6))/(b(j-1)+b(j)),&
+             -(asg(6)*sigma(ie-nx-1,6)+asg(8)*sigma(ie-nx,6))/(b(j-1)+b(j)),&
+             -(asg(2)*sigma(ie-nx-1,5)+asg(4)*sigma(ie-1,5))/(a(i-1)+a(i)),&
+             sigmas(6)/(c(k-1)+c(k))*2+(asg(2)*sigma(ie-nx,5)+asg(4)*sigma(ie,5)-asg(2)*sigma(ie-nx-1,5)-asg(4)*sigma(ie-1,5))/(a(i-1)+a(i))+ &
+             (asg(6)*sigma(ie-1,6)+asg(8)*sigma(ie,6)-asg(6)*sigma(ie-nx-1,6)-asg(8)*sigma(ie-nx,6))/(b(j-1)+b(j)),&
+             (asg(2)*sigma(ie-nx,5)+asg(4)*sigma(ie,5))/(a(i-1)+a(i)),&
+             (asg(6)*sigma(ie-1,6)+asg(8)*sigma(ie,6))/(b(j-1)+b(j))/) 
+             ve = (a(i-1)+a(i))*(b(j-1)+b(j))*(c(k-1)+c(k))
+
+            v((ind-1)*30+1:ind*30) = coef*ve
+            vr((ind-1)*30+1:ind*30) = ind
+            idx = (/(k-1)*nx*(ny+1)+(j-1)*nx+i-1,(k-1)*nx*(ny+1)+(j-1)*nx+i,xnl+(k-1)*ny*(nx+1)+(j-2)*(nx+1)+i,&
+            xnl+(k-1)*ny*(nx+1)+(j-1)*(nx+1)+i,xnl+ynl+(k-2)*(ny+1)*(nx+1)+(j-1)*(nx+1)+i,xnl+ynl+(k-1)*(ny+1)*(nx+1)+(j-1)*(nx+1)+i/)
+            vc((ind-1)*30+1:ind*30) = (/idx(1)-nx*(ny+1),idx(2)-nx*(ny+1),idx(1)-nx,idx(2)-nx,idx(1),idx(2),idx(1)+nx,idx(2)+nx,&
+             idx(1)+nx*(ny+1),idx(2)+nx*(ny+1), idx(3)-ny*(nx+1),idx(4)-ny*(nx+1),idx(3)-1,idx(3),idx(3)+1,idx(4)-1,idx(4),idx(4)+1,&
+             idx(3)+ny*(nx+1),idx(4)+ny*(nx+1), idx(5)-nx-1,idx(5)-1,idx(5),idx(5)+1,idx(5)+nx+1,idx(6)-nx-1,idx(6)-1,idx(6),idx(6)+1,idx(6)+nx+1/)
+            nnz = nnz+30
+           endif
           else
             nnz = nnz+1
-            v((ind-1)*6+1) = 0
-            vr((ind-1)*6+1) = ind
-            vc((ind-1)*6+1) = ind
+            v((ind-1)*bdw2+1) = 0
+            vr((ind-1)*bdw2+1) = ind
+            vc((ind-1)*bdw2+1) = ind
          endif
         enddo
       enddo
@@ -691,10 +859,10 @@ module  divergence_corr
     tia(1) = 1
    ! open(75,file='sfd_divmat.dat')
     do i = 1,np
-          do j = 1,6
-               ind = 6*int((i-1),8)+j
+          do j = 1,bdw2
+               ind = bdw2*int((i-1),8)+j
               ! print *,ind
-               if(vc(ind).ne.0.and.vr(ind).ne.0)then
+               if(v(ind).ne.0.and.vc(ind).ne.0)then
                     k = k +1
                     tmat(k) = v(ind)
      !               tmat2(k) = v2(ind)
@@ -709,6 +877,7 @@ module  divergence_corr
     ! deallocate(tmat2,v2)
     ! close(75)
     ! stop
+    deallocate(sigma_nd)
     deallocate(v,vr,vc)
 659 format(2(i9,2x),2(e9.2,2x))
 
