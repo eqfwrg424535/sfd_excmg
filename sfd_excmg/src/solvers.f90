@@ -178,7 +178,7 @@ subroutine pgpbicg(modelname,ff,polar,nnz, n, ax,by,cz,sig,sig_a,ep,idd, k_mat,&
 
   err_rec = 0
   if(div_cor)then
-    call fddc_assemb(ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,ep)
+    call fddc_assemb(1,ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,ep)
  endif
 
  if (pre_type=='I') then
@@ -355,7 +355,7 @@ if(pre_type/='T') deallocate(jlu,ju)
 
     err_rec = 0
      if(div_cor)then
-       call fddc_assemb(ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,ep)
+       call fddc_assemb(1,ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,ep)
     endif
 
     !print *,n,ia(n+1)
@@ -571,7 +571,7 @@ if(pre_type/='T') deallocate(jlu,ju)
    ! allocate(r(n),rhat(n),p(n),y(n),xmin(n))
    ! allocate(v(n),s(n),z(n),t(n))
     if(div_cor)then
-       call fddc_assemb(ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,ep)
+       call fddc_assemb(1,ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,ep)
     endif
 
       err_rec = 0
@@ -911,7 +911,7 @@ if(pre_type/='T') deallocate(jlu,ju)
    ! err_rec = 0
     print *,itmax,nnz,n
     if (div_cor)then 
-       call fddc_assemb(ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,e_dc)
+       call fddc_assemb(1,ax,by,cz,32,sig,sig_a,d_mat,d_ia,d_ja,t_mat,t_ia,t_ja,el,emap,dc,e_dc)
     endif
 
     !! loading the Jaccobi preconditioner

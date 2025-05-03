@@ -1362,8 +1362,10 @@ subroutine mesh_refine(hc,a,b,c,Nx,Ny,Nz,abr,abu,k,N_air,a1,b1,c1)
           ! if(anlcase)then
           !   u2 = extint_v(nx,ny,nz,nl,u0,u1,3,2)
           ! else
-             u21 = extint_v(nx,ny,nz,nl,u01,u11,2,2)
-             u22 = extint_v(nx,ny,nz,nl,u02,u12,2,2)
+            u21 = extint_v(nx,ny,nz,nl,u01,u11,a1,b1,c1,n_air)
+            u22 = extint_v(nx,ny,nz,nl,u02,u12,a1,b1,c1,n_air)
+           !  u21 = extint_v(nx,ny,nz,nl,u01,u11,2,2)
+           !  u22 = extint_v(nx,ny,nz,nl,u02,u12,2,2)
           ! endif
           ! write(18,*) u2
           ! write(19,*) u1

@@ -3,9 +3,9 @@ module  divergence_corr
     use model_selection
    implicit none
    !character,parameter::pre_type = 'S'
-    logical,parameter ::div_cor = .true., fddc = .true.
-    logical,parameter ::output_div = .false., csem = .true.
-    integer,parameter ::corr_intv = 200
+   ! logical,parameter ::div_cor = .true., fddc = .true.
+   ! logical,parameter ::output_div = .false., csem = .true.
+   ! integer,parameter ::corr_intv = 200
 
     contains
      subroutine div_correc(nl,a,b,c,x,ep,sigma,el,emap,dc,d_mat,d_ia,d_ja,t_mat,t_ia,&
